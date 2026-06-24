@@ -1,0 +1,45 @@
+name: Generate Stats Card
+on:
+  # Every other day at 06:00 UTC (1st, 3rd, 5th ... of the month)
+  schedule:
+    - cron: "0 6 */2 * *"
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "generate.mjs"
+      - "package.json"
+      - ".github/workflows/stats.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - run: npm install
+
+      - name: Render stats card (counts private commits)
+        env:
+          # PAT with `repo` scope, stored as a repo secret.
+          PAT_1: ${{ secrets.METRICS_TOKEN }}
+        run: node generate.mjs
+
+      - name: Commit updated card
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if [[ -n "$(git status --porcelain github-stats.svg)" ]]; then
+            git add github-stats.svg
+            git commit -m "Update stats card [skip ci]"
+            git push
+          else
+            echo "No change in stats card."
+          fi

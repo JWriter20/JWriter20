@@ -1,0 +1,11 @@
+{
+  "name": "profile-stats",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node generate.mjs"
+  },
+  "dependencies": {
+    "github-readme-stats": "github:anuraghazra/github-readme-stats#5df91f9bfa89c356a55cbb3c2bbc164fdbf94a86"
+  }
+}
