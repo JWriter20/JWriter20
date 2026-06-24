@@ -9,6 +9,7 @@
 import { writeFileSync } from "node:fs";
 import { fetchStats } from "github-readme-stats/src/fetchers/stats.js";
 import { renderStatsCard } from "github-readme-stats/src/cards/stats.js";
+import { calculateRank } from "github-readme-stats/src/calculateRank.js";
 
 const USERNAME = "JWriter20";
 const TOKEN = process.env.PAT_1;
@@ -21,7 +22,11 @@ if (!TOKEN) {
 // github-readme-stats' fetcher reads only `totalCommitContributions` (public).
 // It DROPS `restrictedContributionsCount` (your private commits). We fetch that
 // number ourselves with the same token and add it to the card's commit total.
-async function fetchRestrictedCommits() {
+// Fetch the numbers the card's own fetcher can't see with a public token:
+//   - restrictedContributionsCount: your PRIVATE commits (last 12 months)
+//   - followers: not stored on the stats object by fetchStats, so we read it
+//     here to feed the rank accurately (rather than defaulting it to 0).
+async function fetchExtraStats() {
   const res = await fetch("https://api.github.com/graphql", {
     method: "POST",
     headers: {
@@ -29,14 +34,21 @@ async function fetchRestrictedCommits() {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      query: `{ user(login:"${USERNAME}"){ contributionsCollection{ restrictedContributionsCount } } }`,
+      query: `{ user(login:"${USERNAME}"){
+        contributionsCollection{ restrictedContributionsCount }
+        followers { totalCount }
+      } }`,
     }),
   });
   const json = await res.json();
   if (json.errors) {
     throw new Error(`GraphQL error: ${JSON.stringify(json.errors)}`);
   }
-  return json.data.user.contributionsCollection.restrictedContributionsCount;
+  const u = json.data.user;
+  return {
+    restricted: u.contributionsCollection.restrictedContributionsCount,
+    followers: u.followers.totalCount,
+  };
 }
 
 // include_all_commits MUST be false here:
@@ -57,7 +69,7 @@ const stats = await fetchStats(
 
 // Fold private (restricted) commits into the public total the card computed.
 const publicCommits = stats.totalCommits;
-const restricted = await fetchRestrictedCommits();
+const { restricted, followers } = await fetchExtraStats();
 stats.totalCommits = publicCommits + restricted;
 console.log(
   "commits: %d public + %d private = %d total",
@@ -65,6 +77,23 @@ console.log(
   restricted,
   stats.totalCommits,
 );
+
+// fetchStats already computed stats.rank using the PUBLIC commit count only.
+// Recompute it with the private-inclusive total so the letter grade matches
+// the number shown. NOTE: the rank is a percentile whose commit term saturates
+// near ~1000 commits (weight 2 of 11; stars/PRs dominate), so extra commits
+// nudge the grade rather than vaulting it.
+stats.rank = calculateRank({
+  all_commits: includeAllCommits,
+  commits: stats.totalCommits,
+  prs: stats.totalPRs,
+  issues: stats.totalIssues,
+  reviews: stats.totalReviews,
+  repos: 0, // unused by calculateRank
+  stars: stats.totalStars,
+  followers,
+});
+console.log("rank recomputed: %s (top %d%%)", stats.rank.level, Math.round(stats.rank.percentile));
 
 const svg = renderStatsCard(stats, {
   show_icons: true,
