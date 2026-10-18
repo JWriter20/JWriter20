@@ -12,6 +12,9 @@ import { renderStatsCard } from "github-readme-stats/src/cards/stats.js";
 import { calculateRank } from "github-readme-stats/src/calculateRank.js";
 
 const USERNAME = "JWriter20";
+// Orgs I own. fetchStats only counts repos with ownerAffiliations: OWNER, i.e.
+// repos under my personal account, so stars on org repos never show up.
+const ORGS = ["CaptchaKraken", "JobHarvest", "CamoufoxCloud"];
 const TOKEN = process.env.PAT_1;
 
 if (!TOKEN) {
@@ -51,6 +54,42 @@ async function fetchExtraStats() {
   };
 }
 
+// Sum stargazers across every repo in each org (forks included, matching how
+// fetchStats counts my personal repos). Private repos are only visible if the
+// token has access to the org.
+async function fetchOrgStars(org) {
+  let stars = 0;
+  let after = null;
+  do {
+    const res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: {
+        Authorization: `bearer ${TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query: `query($org: String!, $after: String) {
+          organization(login: $org) {
+            repositories(first: 100, after: $after) {
+              nodes { stargazerCount }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }`,
+        variables: { org, after },
+      }),
+    });
+    const json = await res.json();
+    if (json.errors || !json.data?.organization) {
+      throw new Error(`GraphQL error for org ${org}: ${JSON.stringify(json.errors)}`);
+    }
+    const repos = json.data.organization.repositories;
+    for (const r of repos.nodes) stars += r.stargazerCount;
+    after = repos.pageInfo.hasNextPage ? repos.pageInfo.endCursor : null;
+  } while (after);
+  return stars;
+}
+
 // include_all_commits MUST be false here:
 //   false -> GraphQL totalCommitContributions, which counts contributions over
 //            the last-12-months window.
@@ -78,9 +117,20 @@ console.log(
   stats.totalCommits,
 );
 
+// Add stars from repos owned by my orgs.
+const personalStars = stats.totalStars;
+const orgStars = await Promise.all(ORGS.map(fetchOrgStars));
+stats.totalStars = personalStars + orgStars.reduce((a, b) => a + b, 0);
+console.log(
+  "stars: %d personal + %s = %d total",
+  personalStars,
+  ORGS.map((o, i) => `${orgStars[i]} ${o}`).join(" + "),
+  stats.totalStars,
+);
+
 // fetchStats already computed stats.rank using the PUBLIC commit count only.
-// Recompute it with the private-inclusive total so the letter grade matches
-// the number shown. NOTE: the rank is a percentile whose commit term saturates
+// Recompute it with the private-inclusive commit total (and org-inclusive star
+// total) so the letter grade matches the numbers shown. NOTE: the rank is a percentile whose commit term saturates
 // near ~1000 commits (weight 2 of 11; stars/PRs dominate), so extra commits
 // nudge the grade rather than vaulting it.
 stats.rank = calculateRank({
